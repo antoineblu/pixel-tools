@@ -292,8 +292,49 @@ if (els.autoDetectBtn) {
   els.autoDetectBtn.addEventListener("click", runDetection);
 }
 
+// PNG blob from a canvas. Prefers toBlob; falls back to toDataURL for
+// older Safari versions that have no canvas.toBlob.
+function canvasToPngBlob(canvas) {
+  return new Promise((resolve) => {
+    if (typeof canvas.toBlob === "function") {
+      canvas.toBlob((blob) => resolve(blob), "image/png");
+      return;
+    }
+    try {
+      const dataUrl = canvas.toDataURL("image/png");
+      const bin = atob(dataUrl.split(",")[1]);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      resolve(new Blob([bytes], { type: "image/png" }));
+    } catch (err) {
+      console.error(err);
+      resolve(null);
+    }
+  });
+}
+
+// Trigger a file download for a blob URL. Feature-detects the `download`
+// attribute: some Safari versions silently ignore programmatic clicks with
+// it, so there we open the PNG in a new tab where the user can save it.
+function triggerDownload(url, filename) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.rel = "noopener";
+  const canDownload = typeof a.download === "string";
+  if (canDownload) a.download = filename;
+  document.body.appendChild(a);
+  if (canDownload) {
+    a.click();
+    a.remove();
+    return "download";
+  }
+  window.open(url, "_blank", "noopener");
+  a.remove();
+  return "tab";
+}
+
 // Composite image + grid overlay into one PNG and download it.
-function downloadGridPicture() {
+async function downloadGridPicture() {
   if (!imageCanvas.width || !imageCanvas.height) {
     setStatus("Load a picture first, cutie — then download away! 💗");
     return;
@@ -307,21 +348,21 @@ function downloadGridPicture() {
     if (!ctx) throw new Error("no 2d context");
     ctx.drawImage(imageCanvas, 0, 0);
     ctx.drawImage(gridCanvas, 0, 0, out.width, out.height);
-    out.toBlob((blob) => {
-      if (!blob) {
-        setStatus("Hmm, the download fizzled — try again? 🥺");
-        return;
-      }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "pixel-pals-grid.png";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-      setStatus("Saved your gridded masterpiece! 💖");
-    }, "image/png");
+    setStatus("Preparing your picture… 🎁");
+    const blob = await canvasToPngBlob(out);
+    if (!blob) {
+      setStatus("Hmm, the download fizzled — try again? 🥺");
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const how = triggerDownload(url, "pixel-pals-grid.png");
+    // Revoke late: the new-tab fallback still needs the URL afterwards.
+    setTimeout(() => URL.revokeObjectURL(url), how === "tab" ? 60000 : 5000);
+    setStatus(
+      how === "tab"
+        ? "Opened your picture in a new tab — long-press it to save! 💖"
+        : "Saved your gridded masterpiece! 💖"
+    );
   } catch (err) {
     console.error(err);
     setStatus("Download didn't work in this browser — screenshot time? 📸");
