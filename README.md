@@ -48,6 +48,5 @@ tune the detector; toggles switch the red grid and 5×5 chunk highlights.
 The **Clean** button flattens every cell to its median color (`src/clean.js`),
 erasing baked-in grid lines, JPEG wobble and noise — each cell becomes one
 perfect flat square with the red grid on top. It re-cleans automatically when
-you nudge the grid, and the Save button exports exactly what's on screen
-(cleaned or original) — via the native share sheet on iPhone (Save Image
-lands straight in the photo library) or a PNG download elsewhere.
+you nudge the grid, and the download button exports exactly what's on screen
+(cleaned or original).

@@ -7,7 +7,7 @@
  *  - both toggles off draws nothing.
  * Run: `node test/overlay.mjs`
  */
-import { drawGrid } from "../src/overlay.js";
+import { drawGrid, withAlpha } from "../src/overlay.js";
 
 globalThis.window = { devicePixelRatio: 1 };
 
@@ -73,6 +73,20 @@ check("chunk label format col,row", labels.length > 0 && labels[0].text === "0,0
 const c4 = makeCanvas(200);
 drawGrid(c4, { cellW: 20, cellH: 20, offX: 0, offY: 0, showGrid: false, showChunks: false });
 check("toggles off draws nothing", c4.ctx.calls.length === 0);
+
+// Custom grid color drives chunk lines + labels (last stroke wins).
+const c5 = makeCanvas(200);
+drawGrid(c5, { cellW: 20, cellH: 20, offX: 0, offY: 0, showGrid: true, showChunks: true, gridColor: "#00ff00" });
+check("custom color reaches canvas", c5.ctx.strokeStyle === "rgba(0, 255, 0, 1)", ` (got ${c5.ctx.strokeStyle})`);
+
+// Default stays the classic red (backward compatible).
+const c6 = makeCanvas(200);
+drawGrid(c6, { cellW: 20, cellH: 20, offX: 0, offY: 0, showGrid: false, showChunks: true });
+check("default color is classic red", c6.ctx.strokeStyle === "rgba(255, 45, 85, 1)");
+
+// withAlpha helper: short hex + garbage fallback.
+check("withAlpha short hex", withAlpha("#0f0", 0.5) === "rgba(0, 255, 0, 0.5)");
+check("withAlpha garbage falls back to red", withAlpha("nope", 1) === "rgba(255, 45, 85, 1)");
 
 if (failures) {
   console.error(`\n${failures} check(s) FAILED`);
