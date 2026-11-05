@@ -53,6 +53,7 @@ for (const id of [
   "showGrid",
   "showChunks",
   "autoDetectBtn",
+  "downloadBtn",
   "status",
 ]) {
   els[id] = $(id);
@@ -289,6 +290,45 @@ if (els.showChunks) {
 }
 if (els.autoDetectBtn) {
   els.autoDetectBtn.addEventListener("click", runDetection);
+}
+
+// Composite image + grid overlay into one PNG and download it.
+function downloadGridPicture() {
+  if (!imageCanvas.width || !imageCanvas.height) {
+    setStatus("Load a picture first, cutie — then download away! 💗");
+    return;
+  }
+  try {
+    redrawOverlay(); // make sure the export matches what's on screen
+    const out = document.createElement("canvas");
+    out.width = imageCanvas.width;
+    out.height = imageCanvas.height;
+    const ctx = out.getContext("2d");
+    if (!ctx) throw new Error("no 2d context");
+    ctx.drawImage(imageCanvas, 0, 0);
+    ctx.drawImage(gridCanvas, 0, 0, out.width, out.height);
+    out.toBlob((blob) => {
+      if (!blob) {
+        setStatus("Hmm, the download fizzled — try again? 🥺");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "pixel-pals-grid.png";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      setStatus("Saved your gridded masterpiece! 💖");
+    }, "image/png");
+  } catch (err) {
+    console.error(err);
+    setStatus("Download didn't work in this browser — screenshot time? 📸");
+  }
+}
+if (els.downloadBtn) {
+  els.downloadBtn.addEventListener("click", downloadGridPicture);
 }
 
 // Keep overlay crisp if the window moves across displays (dpr change).
