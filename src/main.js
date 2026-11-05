@@ -19,8 +19,11 @@
  *   the status line explains why (overlay + manual controls still work).
  */
 
-import { drawGrid } from "./overlay.js";
-import { cleanImage } from "./clean.js";
+// NOTE: bump the ?v= query on every asset change — GitHub Pages (and
+// Safari) cache aggressively, and a stale JS/CSS with fresh HTML is the
+// classic "button exists but does nothing" mystery. Bump all together.
+import { drawGrid } from "./overlay.js?v=2";
+import { cleanImage } from "./clean.js?v=2";
 
 const $ = (id) => document.getElementById(id);
 
@@ -128,7 +131,7 @@ function redrawOverlay() {
 async function loadDetectFn() {
   if (detectGridFn) return detectGridFn;
   try {
-    const mod = await import("./detect.js");
+    const mod = await import("./detect.js?v=2");
     if (typeof mod.detectGrid === "function") {
       detectGridFn = mod.detectGrid;
       return detectGridFn;
@@ -460,12 +463,18 @@ if (els.cleanBtn) {
   els.cleanBtn.addEventListener("click", () => setCleaned(!state.cleaned));
 }
 
-// Grid color wheel -> state -> overlay redraw.
+// Grid color wheel -> state -> overlay redraw (+ swatch preview).
 const gridColorEl = $("gridColor");
+const gridSwatchEl = $("gridSwatch");
+function syncSwatch() {
+  if (gridSwatchEl) gridSwatchEl.style.setProperty("--pick", state.gridColor);
+}
 if (gridColorEl) {
   if (gridColorEl.value) state.gridColor = gridColorEl.value;
+  syncSwatch();
   gridColorEl.addEventListener("input", () => {
     if (gridColorEl.value) state.gridColor = gridColorEl.value;
+    syncSwatch();
     redrawOverlay();
   });
 }
