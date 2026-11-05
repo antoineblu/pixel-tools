@@ -20,6 +20,7 @@
  */
 
 import { drawGrid } from "./overlay.js";
+import { cleanImage } from "./clean.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -33,11 +34,13 @@ const state = {
   threshold: 60,
   showGrid: true,
   showChunks: true,
+  cleaned: false, // viewing the median-flattened image (rebuilt from original)
 };
 
 const els = {};
 let imgEl = null; // currently loaded HTMLImageElement (for re-detect / redraw)
 let detectGridFn = null; // lazily imported from ./detect.js
+let originalImageData = null; // pristine upload; cleaning always starts here
 
 for (const id of [
   "fileInput",
@@ -54,6 +57,7 @@ for (const id of [
   "showChunks",
   "autoDetectBtn",
   "downloadBtn",
+  "cleanBtn",
   "status",
 ]) {
   els[id] = $(id);
@@ -157,7 +161,11 @@ async function runDetection() {
   try {
     els.autoDetectBtn.disabled = true;
     setStatus("Detecting grid…");
-    const imageData = imageCtx.getImageData(0, 0, imageCanvas.width, imageCanvas.height);
+    // Always detect on the pristine upload, even in cleaned view.
+    const imageData =
+      state.cleaned && originalImageData
+        ? originalImageData
+        : imageCtx.getImageData(0, 0, imageCanvas.width, imageCanvas.height);
     const result = await fn(imageData, {
       blurRadius: blurToRadius(state.blurAmt),
       threshold: state.threshold,
@@ -168,7 +176,7 @@ async function runDetection() {
       }
       syncAllPairs();
     }
-    redrawOverlay();
+    refreshCleanedView(); // re-cleans when cleaned mode is on
     setStatus(
       `Grid: ${state.cellW}×${state.cellH}px @ (${state.offX}, ${state.offY}). Tweak freely.`
     );
@@ -186,6 +194,11 @@ function drawImageToCanvas(img) {
   imageCtx.imageSmoothingEnabled = false;
   imageCtx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
   imageCtx.drawImage(img, 0, 0);
+  // Pristine copy: cleaning always starts here, detection reads it too.
+  originalImageData = imageCtx.getImageData(0, 0, imageCanvas.width, imageCanvas.height);
+  // A new upload leaves cleaned mode.
+  state.cleaned = false;
+  if (els.cleanBtn) els.cleanBtn.textContent = "🧹 Clean my pixels!";
 }
 
 function loadFile(file) {
@@ -263,7 +276,7 @@ for (let i = 0; i < pairs.length; i++) {
     numEl.addEventListener("input", () => {
       state[key] = clampNum(numEl.value, min, max, state[key]);
       if (sliderEl) sliderEl.value = String(state[key]);
-      redrawOverlay();
+      refreshView(key);
     });
     numEl.addEventListener("change", () => syncPairToState(key, sliderId, min, max));
   }
@@ -271,7 +284,7 @@ for (let i = 0; i < pairs.length; i++) {
     sliderEl.addEventListener("input", () => {
       state[key] = clampNum(sliderEl.value, min, max, state[key]);
       if (numEl) numEl.value = String(state[key]);
-      redrawOverlay();
+      refreshView(key);
     });
   }
 }
@@ -370,6 +383,80 @@ async function downloadGridPicture() {
 }
 if (els.downloadBtn) {
   els.downloadBtn.addEventListener("click", downloadGridPicture);
+}
+
+// ---- cleaned view (median-flattened pixels) ----
+function putPixels(pixels) {
+  // createImageData (not `new ImageData`) for old-Safari safety.
+  const img = imageCtx.createImageData(pixels.width, pixels.height);
+  img.data.set(pixels.data);
+  imageCtx.putImageData(img, 0, 0);
+}
+
+// Rebuild the cleaned image from the pristine upload with current grid
+// params, show it, redraw the overlay. Returns false when impossible.
+function applyClean() {
+  if (!originalImageData) return false;
+  try {
+    const out = cleanImage(originalImageData, {
+      cellW: state.cellW,
+      cellH: state.cellH,
+      offX: state.offX,
+      offY: state.offY,
+    });
+    putPixels(out);
+    redrawOverlay();
+    return true;
+  } catch (err) {
+    console.error(err);
+    return false;
+  }
+}
+
+// After any grid-affecting change: re-clean when cleaned mode is on,
+// otherwise just redraw the overlay.
+function refreshView(key) {
+  if (
+    state.cleaned &&
+    (key === "cellW" || key === "cellH" || key === "offX" || key === "offY")
+  ) {
+    applyClean();
+    return;
+  }
+  redrawOverlay();
+}
+
+// Same as refreshView() without a specific key (detection, resize…).
+function refreshCleanedView() {
+  if (state.cleaned) applyClean();
+  else redrawOverlay();
+}
+
+function setCleaned(on) {
+  if (on) {
+    if (!originalImageData) {
+      setStatus("Load a picture first, cutie — then sparkle-clean it! ✨");
+      return;
+    }
+    if (!applyClean()) {
+      setStatus("Cleaning fizzled — tweak the grid first? 🧹");
+      return;
+    }
+    state.cleaned = true;
+    if (els.cleanBtn) els.cleanBtn.textContent = "↩ Back to photo";
+    setStatus("Squeaky clean! Nudge the grid and it re-cleans. ✨");
+  } else {
+    state.cleaned = false;
+    if (originalImageData) {
+      putPixels(originalImageData);
+      redrawOverlay();
+    }
+    if (els.cleanBtn) els.cleanBtn.textContent = "🧹 Clean my pixels!";
+    setStatus("Back to the original photo. 📷");
+  }
+}
+if (els.cleanBtn) {
+  els.cleanBtn.addEventListener("click", () => setCleaned(!state.cleaned));
 }
 
 // Keep overlay crisp if the window moves across displays (dpr change).

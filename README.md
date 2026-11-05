@@ -34,6 +34,7 @@ alternating line strength) → fractional refinement. See the file header and
 ```sh
 node test/verify.mjs   # synthetic square + stretched grids (needs src/detect.js)
 node test/overlay.mjs  # grid/chunk overlay geometry with stubbed canvas
+node test/clean.mjs    # median flattening: lines + noise erased (needs src/clean.js)
 ```
 
 ## Manual controls
@@ -41,3 +42,11 @@ node test/overlay.mjs  # grid/chunk overlay geometry with stubbed canvas
 Auto-detect pre-fills cell width/height and offset X/Y on every upload; nudge
 any of them by hand when the source is stretched oddly. Blur and threshold
 tune the detector; toggles switch the red grid and 5×5 chunk highlights.
+
+## Clean my pixels 🧹
+
+The **Clean** button flattens every cell to its median color (`src/clean.js`),
+erasing baked-in grid lines, JPEG wobble and noise — each cell becomes one
+perfect flat square with the red grid on top. It re-cleans automatically when
+you nudge the grid, and the download button exports exactly what's on screen
+(cleaned or original).
