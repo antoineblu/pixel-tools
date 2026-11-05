@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pixel Pals — Cute Grid Detector</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bg-sparkles" aria-hidden="true"></div>
+  <header class="app-header">
+    <div class="title-row">
+      <svg class="pixel-heart" width="40" height="40" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="4" height="4" fill="#ff5c8a"/><rect x="10" y="2" width="4" height="4" fill="#ff5c8a"/><rect x="1" y="5" width="14" height="4" fill="#ff5c8a"/><rect x="2" y="9" width="12" height="2" fill="#ff5c8a"/><rect x="4" y="11" width="8" height="2" fill="#ff5c8a"/><rect x="6" y="13" width="4" height="1" fill="#ff5c8a"/><rect x="3" y="3" width="2" height="2" fill="#ffc2d4"/></svg>
+      <div>
+        <h1>Pixel Pals <span class="sparkle" aria-hidden="true">✨</span></h1>
+        <p class="subtitle">your sweet little sprite-grid helper 💗</p>
+      </div>
+      <svg class="pixel-heart flip" width="40" height="40" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="4" height="4" fill="#ff5c8a"/><rect x="10" y="2" width="4" height="4" fill="#ff5c8a"/><rect x="1" y="5" width="14" height="4" fill="#ff5c8a"/><rect x="2" y="9" width="12" height="2" fill="#ff5c8a"/><rect x="4" y="11" width="8" height="2" fill="#ff5c8a"/><rect x="6" y="13" width="4" height="1" fill="#ff5c8a"/><rect x="3" y="3" width="2" height="2" fill="#ffc2d4"/></svg>
+    </div>
+    <p class="tagline">drop in your pixel art, and we'll find its cozy little grid ♡</p>
+  </header>
+
+  <main class="layout">
+    <section class="stage-section">
+      <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Drop an image here or click to browse">
+        <p class="drop-hint"><strong>Drag &amp; drop</strong> your art here, cutie — or</p>
+        <label class="file-btn" for="fileInput">♡ Choose file ♡</label>
+        <input type="file" id="fileInput" accept="image/*" hidden />
+        <p class="drop-sub">PNG / JPEG / GIF / WebP · everything stays snug in your browser, nothing uploads!</p>
+      </div>
+
+      <div class="canvas-stack" id="canvasStack">
+        <canvas id="imageCanvas"></canvas>
+        <canvas id="gridCanvas"></canvas>
+      </div>
+      <p id="status" class="status" role="status" aria-live="polite">No image loaded yet… let's add one! 🌸</p>
+    </section>
+
+    <aside class="controls" aria-label="Grid controls">
+      <h2>✿ Sweet Controls ✿</h2>
+
+      <fieldset class="control-group">
+        <legend>🧁 Cell size</legend>
+        <div class="control-row">
+          <label for="cellW">Width (px)</label>
+          <input type="number" id="cellW" min="2" max="100" step="1" value="16" />
+          <input type="range" id="cellWSlider" min="2" max="100" step="1" value="16" aria-label="Cell width slider" />
+        </div>
+        <div class="control-row">
+          <label for="cellH">Height (px)</label>
+          <input type="number" id="cellH" min="2" max="100" step="1" value="16" />
+          <input type="range" id="cellHSlider" min="2" max="100" step="1" value="16" aria-label="Cell height slider" />
+        </div>
+      </fieldset>
+
+      <fieldset class="control-group">
+        <legend>🎀 Offset</legend>
+        <div class="control-row">
+          <label for="offX">X (px)</label>
+          <input type="number" id="offX" min="-100" max="100" step="1" value="0" />
+          <input type="range" id="offXSlider" min="-100" max="100" step="1" value="0" aria-label="Offset X slider" />
+        </div>
+        <div class="control-row">
+          <label for="offY">Y (px)</label>
+          <input type="number" id="offY" min="-100" max="100" step="1" value="0" />
+          <input type="range" id="offYSlider" min="-100" max="100" step="1" value="0" aria-label="Offset Y slider" />
+        </div>
+      </fieldset>
+
+      <fieldset class="control-group">
+        <legend>💖 Detection magic</legend>
+        <div class="control-row">
+          <label for="blurAmt">Blur</label>
+          <input type="number" id="blurAmt" min="0" max="20" step="0.5" value="0" />
+          <input type="range" id="blurAmtSlider" min="0" max="20" step="0.5" value="0" aria-label="Blur amount slider" />
+        </div>
+        <div class="control-row">
+          <label for="threshold">Threshold</label>
+          <input type="number" id="threshold" min="0" max="255" step="1" value="60" />
+          <input type="range" id="thresholdSlider" min="0" max="255" step="1" value="60" aria-label="Threshold slider" />
+        </div>
+        <button type="button" id="autoDetectBtn" class="primary-btn">✨ Auto-detect my grid! ✨</button>
+        <p class="tiny-hint">one click and poof — perfect cells!</p>
+      </fieldset>
+
+      <fieldset class="control-group">
+        <legend>🌷 Overlay sprinkles</legend>
+        <label class="toggle-row">
+          <input type="checkbox" id="showGrid" checked />
+          <span>Red grid</span>
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" id="showChunks" checked />
+          <span>5&times;5 chunks</span>
+        </label>
+      </fieldset>
+    </aside>
+  </main>
+
+  <footer class="footer">made with 💗 for pixel pals everywhere · your art never leaves this page</footer>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
