@@ -346,6 +346,33 @@ function triggerDownload(url, filename) {
   return "tab";
 }
 
+// Share a PNG via the native share sheet when possible (iPhone: Share →
+// Save Image lands straight in the photo library), otherwise fall back to
+// the classic download. Returns "shared" | "download" | "tab" | "dismissed".
+async function shareOrDownload(url, blob, filename) {
+  let file = null;
+  try {
+    file = new File([blob], filename, { type: "image/png" });
+  } catch (err) {
+    file = null; // very old browsers: skip straight to download
+  }
+  if (
+    file &&
+    navigator.canShare &&
+    navigator.share &&
+    navigator.canShare({ files: [file] })
+  ) {
+    try {
+      await navigator.share({ files: [file], title: "Pixel Pals grid" });
+      return "shared";
+    } catch (err) {
+      if (err && err.name === "AbortError") return "dismissed";
+      console.error(err); // fall through to download
+    }
+  }
+  return triggerDownload(url, filename);
+}
+
 // Composite image + grid overlay into one PNG and download it.
 async function downloadGridPicture() {
   if (!imageCanvas.width || !imageCanvas.height) {
@@ -368,14 +395,18 @@ async function downloadGridPicture() {
       return;
     }
     const url = URL.createObjectURL(blob);
-    const how = triggerDownload(url, "pixel-pals-grid.png");
+    const how = await shareOrDownload(url, blob, "pixel-pals-grid.png");
     // Revoke late: the new-tab fallback still needs the URL afterwards.
     setTimeout(() => URL.revokeObjectURL(url), how === "tab" ? 60000 : 5000);
-    setStatus(
-      how === "tab"
-        ? "Opened your picture in a new tab — long-press it to save! 💖"
-        : "Saved your gridded masterpiece! 💖"
-    );
+    if (how === "tab") {
+      setStatus("Opened your picture in a new tab — long-press it to save! 💖");
+    } else if (how === "shared") {
+      setStatus("Shared! Tap Save Image and it's in your photos. 💖");
+    } else if (how === "dismissed") {
+      setStatus("Share sheet closed — tap Save anytime! 💗");
+    } else {
+      setStatus("Saved your gridded masterpiece! 💖");
+    }
   } catch (err) {
     console.error(err);
     setStatus("Download didn't work in this browser — screenshot time? 📸");
