@@ -22,9 +22,11 @@
 // NOTE: bump the ?v= query on every asset change — GitHub Pages (and
 // Safari) cache aggressively, and a stale JS/CSS with fresh HTML is the
 // classic "button exists but does nothing" mystery. Bump all together.
-import { drawGrid } from "./overlay.js?v=3";
-import { cleanImage } from "./clean.js?v=3";
-import { extractCellColors, groupByHue, applyPalette } from "./palette.js?v=3";
+// APP_VERSION is shown in the footer so you can SEE which build runs.
+const APP_VERSION = 4;
+import { drawGrid } from "./overlay.js?v=4";
+import { cleanImage } from "./clean.js?v=4";
+import { extractCellColors, groupByHue, applyPalette } from "./palette.js?v=4";
 
 const $ = (id) => document.getElementById(id);
 
@@ -137,7 +139,7 @@ function redrawOverlay() {
 async function loadDetectFn() {
   if (detectGridFn) return detectGridFn;
   try {
-    const mod = await import("./detect.js?v=2");
+    const mod = await import("./detect.js?v=4");
     if (typeof mod.detectGrid === "function") {
       detectGridFn = mod.detectGrid;
       return detectGridFn;
@@ -623,3 +625,7 @@ window.addEventListener("resize", () => redrawOverlay());
 
 // Init
 syncAllPairs();
+
+// Build marker in the footer: proves which deployed version runs.
+const versionEl = $("appVersion");
+if (versionEl) versionEl.textContent = `v${APP_VERSION}`;

@@ -41,11 +41,14 @@ node test/palette.mjs  # hue families + per-family shade levels (needs src/palet
 ## Palette cuties 🎨
 
 After **Clean**, each hue family (pink, green, blue, …) gets its own card
-with a **1..N shades slider** (`src/palette.js`). Near-duplicates from JPEG
-wobble (≤ 6 levels per channel) are pre-merged, then lowering a slider
-re-quantizes just that family — e.g. 5 pinks → 3 for a softer gradient or
-→ 1 for a flat fill. Grays/blacks/white live in their own family. Moving a
-slider never re-cleans; nudging the grid re-cleans and rebuilds the palette
+with a **1..N shades slider** (`src/palette.js`). Grouping works in CIELAB:
+near-duplicates below 2.5 DeltaE (invisible JPEG wobble) are pre-merged,
+gray means low chroma (a JPEG-tinted gray stays gray, a pale pink with a
+frank pink-ward vector stays pink), and hue families are cut circularly so
+reds and pinks stay separate. Lowering a slider re-quantizes just that
+family — e.g. 5 pinks → 3 for a softer gradient or → 1 for a flat fill.
+Grays/blacks/white live in their own family. Moving a slider never
+re-cleans; nudging the grid re-cleans and rebuilds the palette
 (kept levels are clamped to the new shade counts).
 
 ## Manual controls

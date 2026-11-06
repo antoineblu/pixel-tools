@@ -110,6 +110,45 @@ check("applyPalette k=1 : 8 -> 4 couleurs", countColors(out1) === 4, ` (got ${co
 const outId = applyPalette(cleaned, grid, fams, {});
 check("sans réglage : image identique", countColors(outId) === 8);
 
+// Cas signalés : gris teinté JPEG -> gris, rose pâle -> rose,
+// rouge séparé du rose, violet reconnu.
+const tricky = [
+  [245, 220, 230], // rose pâle (petit vecteur, direction rose franche)
+  [235, 190, 205], // rose poudre
+  [170, 150, 158], // gris teinté rose par le JPEG
+  [128, 128, 128], // gris neutre
+  [230, 40, 60], // rouge franc
+  [150, 90, 200], // violet
+  [60, 180, 90], // vert
+];
+const TW = tricky.length * cellW;
+const tdata = new Uint8ClampedArray(TW * cellH * 4);
+for (let cx = 0; cx < tricky.length; cx++) {
+  const [r, g, b] = tricky[cx];
+  for (let y = 0; y < cellH; y++) {
+    for (let x = cx * cellW; x < (cx + 1) * cellW; x++) {
+      const i = (y * TW + x) * 4;
+      tdata[i] = r;
+      tdata[i + 1] = g;
+      tdata[i + 2] = b;
+      tdata[i + 3] = 255;
+    }
+  }
+}
+const tcolors = extractCellColors({ width: TW, height: cellH, data: tdata }, grid);
+const tfams = groupByHue(tcolors);
+const famOf = (r, g, b) => tfams.find((f) => f.colors.some((c) => c.r === r && c.g === g && c.b === b));
+check("rose pâle reste rose", famOf(245, 220, 230)?.name === "Rose", ` (got ${famOf(245, 220, 230)?.name})`);
+check("rose poudre reste rose", famOf(235, 190, 205)?.name === "Rose", ` (got ${famOf(235, 190, 205)?.name})`);
+check(
+  "rose pâle + poudre dans la même famille",
+  famOf(245, 220, 230) === famOf(235, 190, 205)
+);
+check("gris teinté JPEG reste gris", famOf(170, 150, 158)?.name === "Gris / Noir / Blanc", ` (got ${famOf(170, 150, 158)?.name})`);
+check("rouge séparé du rose", famOf(230, 40, 60)?.name === "Rouge" && famOf(230, 40, 60) !== famOf(245, 220, 230), ` (got ${famOf(230, 40, 60)?.name})`);
+check("violet reconnu", famOf(150, 90, 200)?.name === "Violet", ` (got ${famOf(150, 90, 200)?.name})`);
+check("vert reconnu", famOf(60, 180, 90)?.name === "Vert", ` (got ${famOf(60, 180, 90)?.name})`);
+
 if (failures) {
   console.error(`\n${failures} check(s) FAILED`);
   process.exit(1);

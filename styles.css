@@ -385,6 +385,20 @@ details.control-group > .control-row:first-of-type {
   font-size: 0.82rem;
 }
 
+/* Build marker: shows which deployed version is actually running
+   (handy when Safari insists on serving a stale copy). */
+.version-badge {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--accent-deep);
+  background: var(--accent-pale);
+  border: 1px solid var(--accent-soft);
+  border-radius: 999px;
+}
+
 /* Palette families: one card per hue family with its own shade slider. */
 .palette-list {
   display: flex;

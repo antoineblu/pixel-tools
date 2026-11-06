@@ -3,19 +3,26 @@
  *
  * Pipeline (travaille sur l'image NETTOYÉE : chaque cellule = 1 couleur plate) :
  *   1. extractCellColors : lit le pixel central de chaque cellule -> [{r,g,b,count}]
- *      + pré-fusion des quasi-doublons (écart max <= MERGE_BOX, artefacts JPEG).
- *   2. groupByHue : sépare achromatiques (saturation faible) des chromatiques,
- *      regroupe les chromatiques par angle de teinte HSV (coupure aux grands gaps).
+ *      + pré-fusion des quasi-doublons par DeltaE (artefacts JPEG invisibles).
+ *   2. groupByHue : sépare achromatiques (faible chroma CIELAB) des chromatiques,
+ *      regroupe les chromatiques par teinte CIELAB circulaire (coupure au plus
+ *      grand gap). La DIRECTION du vecteur chrominance compte, pas la proximité
+ *      RGB brute : un gris teinté JPEG (petit vecteur, direction bruitée) reste
+ *      gris, un rose pâle (petit vecteur mais franchement direction rose) reste rose.
  *   3. quantizeFamily : réduit les N nuances d'une famille à k (1..N) en triant
- *      par luminosité et en découpant en k paquets à poids équilibré.
+ *      par clarté L et en découpant en k paquets à poids équilibré.
  *   4. applyPalette : remappe chaque cellule vers son représentant quantifié.
  *
  * Pur, sans DOM. Les familles portent un id stable dérivé de leur teinte
- * ("hue-310" ou "gray") pour que les sliders survivent à un re-clean.
+ * ("hue-355" ou "gray") pour que les sliders survivent à un re-clean.
  */
 
-var MERGE_BOX = 6; // écart max par canal pour fusionner deux variantes JPEG
-var GRAY_SAT = 0.14; // saturation HSV sous laquelle un gris est achromatique
+// Fusion JPEG : en dessous de ~2-3 DeltaE, l'écart est invisible (JND).
+// Mesuré : wobble JPEG ±4 -> dE ~0.7 ; vraies nuances proches -> dE >= 3.4.
+var MERGE_DE = 2.5;
+// Seuil achromatique sur la chroma CIELAB. Mesuré : gris teinté JPEG C ~9,
+// rose pâle C ~10.4, gris chaud C ~12.7 (lui est vraiment mauve : il reste rose).
+var GRAY_CHROMA = 10;
 var HUE_GAP = 28; // coupure entre familles quand le gap de teinte dépasse ce seuil (degrés)
 var MIN_FAMILY_SHARE = 0.015; // familles < 1.5% des cellules absorbées par la voisine
 
@@ -29,22 +36,56 @@ function hexOf(r, g, b) {
   return "#" + h;
 }
 
-export function rgbToHsv(r, g, b) {
-  var rp = r / 255;
-  var gp = g / 255;
-  var bp = b / 255;
-  var mx = Math.max(rp, gp, bp);
-  var mn = Math.min(rp, gp, bp);
-  var d = mx - mn;
-  var h = 0;
-  if (d > 0) {
-    if (mx === rp) h = 60 * (((gp - bp) / d) % 6);
-    else if (mx === gp) h = 60 * ((bp - rp) / d + 2);
-    else h = 60 * ((rp - gp) / d + 4);
+// sRGB -> CIELAB (D65) + chroma + teinte. ~40 lignes, pas de dépendance.
+export function rgbToLab(r, g, b) {
+  function lin(c) {
+    c /= 255;
+    return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
   }
+  var R = lin(r);
+  var G = lin(g);
+  var B = lin(b);
+  var x = (R * 0.4124 + G * 0.3576 + B * 0.1805) / 0.95047;
+  var y = R * 0.2126 + G * 0.7152 + B * 0.0722;
+  var z = (R * 0.0193 + G * 0.1192 + B * 0.9505) / 1.08883;
+  function t(c) {
+    return c > 0.008856 ? Math.cbrt(c) : 7.787 * c + 16 / 116;
+  }
+  x = t(x);
+  y = t(y);
+  z = t(z);
+  var L = 116 * y - 16;
+  var a = 500 * (x - y);
+  var bb = 200 * (y - z);
+  var C = Math.sqrt(a * a + bb * bb);
+  var h = (Math.atan2(bb, a) * 180) / Math.PI;
   if (h < 0) h += 360;
-  var s = mx === 0 ? 0 : d / mx;
-  return { h: h, s: s, v: mx };
+  return { L: L, a: a, b: bb, C: C, h: h };
+}
+
+export function deltaE(la, lb) {
+  var dL = la.L - lb.L;
+  var da = la.a - lb.a;
+  var db = la.b - lb.b;
+  return Math.sqrt(dL * dL + da * da + db * db);
+}
+
+// Moyenne circulaire de teintes, pondérée (poids = nb de cellules × chroma :
+// les couleurs franches ancrent la famille, pas le bruit presque-gris).
+function hueMean(items) {
+  var x = 0;
+  var y = 0;
+  var tot = 0;
+  for (var i = 0; i < items.length; i++) {
+    var w = items[i].count * Math.max(items[i].C, 1);
+    var rad = (items[i].h * Math.PI) / 180;
+    x += Math.cos(rad) * w;
+    y += Math.sin(rad) * w;
+    tot += w;
+  }
+  if (tot === 0) return 0;
+  var deg = (Math.atan2(y, x) * 180) / Math.PI;
+  return deg < 0 ? deg + 360 : deg;
 }
 
 function hueDist(a, b) {
@@ -52,32 +93,21 @@ function hueDist(a, b) {
   return d > 180 ? 360 - d : d;
 }
 
-function hueMean(hues, weights) {
-  var x = 0;
-  var y = 0;
-  for (var i = 0; i < hues.length; i++) {
-    var rad = (hues[i] * Math.PI) / 180;
-    x += Math.cos(rad) * weights[i];
-    y += Math.sin(rad) * weights[i];
-  }
-  if (x === 0 && y === 0) return hues[0] || 0;
-  var deg = (Math.atan2(y, x) * 180) / Math.PI;
-  return deg < 0 ? deg + 360 : deg;
-}
-
-// Nom affichable à partir d'un angle de teinte (français, volontairement large).
+// Nom affichable à partir d'une teinte CIELAB hab (0° = axe +a, rouge).
+// Bornes calibrées sur mesures : rouge ~28°, orange ~67°, jaune ~97°,
+// vert ~145-152°, menthe ~171°, cyan ~216°, bleu ~288-297°, violet ~313°,
+// magenta ~328-338°, rose ~350-5°.
 export function hueName(h) {
-  if (h < 12 || h >= 345) return "Rouge";
-  if (h < 32) return "Orange";
-  if (h < 52) return "Jaune";
-  if (h < 78) return "Vert anis";
-  if (h < 150) return "Vert";
-  if (h < 175) return "Menthe";
-  if (h < 200) return "Cyan";
-  if (h < 250) return "Bleu";
-  if (h < 290) return "Violet";
-  if (h < 325) return "Magenta";
-  return "Rose";
+  if (h < 10 || h >= 345) return "Rose";
+  if (h < 45) return "Rouge";
+  if (h < 75) return "Orange";
+  if (h < 105) return "Jaune";
+  if (h < 165) return "Vert";
+  if (h < 195) return "Menthe";
+  if (h < 245) return "Cyan";
+  if (h < 300) return "Bleu";
+  if (h < 322) return "Violet";
+  return "Magenta";
 }
 
 function familyIdFor(hue, gray) {
@@ -122,15 +152,15 @@ export function extractCellColors(cleaned, opts) {
     }
   }
 
-  // Pré-fusion des quasi-doublons JPEG : greedy, les gros absorbent les petits proches.
+  // Pré-fusion des quasi-doublons invisibles : greedy en DeltaE, les gros
+  // absorbent les petits proches. La moyenne stabilise les cas limites
+  // (un gris teinté reste gris au lieu d'éparpiller ses cellules).
   var entries = [];
   counts.forEach(function (count, k) {
-    entries.push({
-      r: (k >> 16) & 255,
-      g: (k >> 8) & 255,
-      b: k & 255,
-      count: count,
-    });
+    var r = (k >> 16) & 255;
+    var g = (k >> 8) & 255;
+    var b = k & 255;
+    entries.push({ r: r, g: g, b: b, count: count, lab: rgbToLab(r, g, b) });
   });
   entries.sort(function (a, b) {
     return b.count - a.count;
@@ -141,31 +171,29 @@ export function extractCellColors(cleaned, opts) {
     var absorbed = false;
     for (var m = 0; m < merged.length; m++) {
       var t = merged[m];
-      if (
-        Math.abs(t.r - c.r) <= MERGE_BOX &&
-        Math.abs(t.g - c.g) <= MERGE_BOX &&
-        Math.abs(t.b - c.b) <= MERGE_BOX
-      ) {
-        // Moyenne pondérée : le représentant suit le barycentre réel.
+      if (deltaE(t.lab, c.lab) < MERGE_DE) {
         var tot = t.count + c.count;
         t.r = Math.round((t.r * t.count + c.r * c.count) / tot);
         t.g = Math.round((t.g * t.count + c.g * c.count) / tot);
         t.b = Math.round((t.b * t.count + c.b * c.count) / tot);
         t.count = tot;
+        t.lab = rgbToLab(t.r, t.g, t.b);
         absorbed = true;
         break;
       }
     }
-    if (!absorbed) merged.push({ r: c.r, g: c.g, b: c.b, count: c.count });
+    if (!absorbed) merged.push({ r: c.r, g: c.g, b: c.b, count: c.count, lab: c.lab });
   }
   merged.sort(function (a, b) {
     return b.count - a.count;
   });
-  return merged;
+  return merged.map(function (c) {
+    return { r: c.r, g: c.g, b: c.b, count: c.count };
+  });
 }
 
 /**
- * Regroupe des couleurs en familles de teinte.
+ * Regroupe des couleurs en familles de teinte (décision sur le Lab).
  * @param {Array<{r,g,b,count}>} colors
  * @returns {Array<{id,name,hue,gray,colors,total,hex}>} familles triées par total desc.
  */
@@ -174,28 +202,71 @@ export function groupByHue(colors) {
   var chroma = [];
   for (var i = 0; i < colors.length; i++) {
     var c = colors[i];
-    var hsv = rgbToHsv(c.r, c.g, c.b);
-    var item = { r: c.r, g: c.g, b: c.b, count: c.count, hue: hsv.h, sat: hsv.s, val: hsv.v };
-    if (hsv.s < GRAY_SAT) grays.push(item);
+    var lab = rgbToLab(c.r, c.g, c.b);
+    var item = { r: c.r, g: c.g, b: c.b, count: c.count, h: lab.h, C: lab.C, L: lab.L };
+    if (lab.C < GRAY_CHROMA) grays.push(item);
     else chroma.push(item);
   }
   chroma.sort(function (a, b) {
-    return a.hue - b.hue;
+    return a.h - b.h;
   });
 
-  // Découpe aux grands gaps de teinte.
+  // Découpe circulaire : on coupe au PLUS GRAND gap (wrap inclus), puis aux
+  // gaps intérieurs > HUE_GAP. Ça évite de couper une famille à cheval sur 0°
+  // (ex. des roses à 355° et 5° restent ensemble).
   var groups = [];
-  var cur = [];
-  for (var j = 0; j < chroma.length; j++) {
-    if (cur.length > 0 && chroma[j].hue - chroma[j - 1].hue > HUE_GAP) {
+  if (chroma.length) {
+    var n = chroma.length;
+    if (n === 1) {
+      groups.push([chroma[0]]);
+    } else {
+      var gaps = [];
+      for (var j = 0; j < n; j++) {
+        var nxt = chroma[(j + 1) % n];
+        var gap = (nxt.h - chroma[j].h + 360) % 360;
+        gaps.push(gap);
+      }
+      var cut = 0;
+      var maxGap = -1;
+      for (var g2 = 0; g2 < n; g2++) {
+        if (gaps[g2] > maxGap) {
+          maxGap = gaps[g2];
+          cut = g2;
+        }
+      }
+      // Ordre de parcours à partir d'après la coupe, teintes DÉROULÉES
+      // (+360° après un passage par 0°) pour que les gaps restent mesurables.
+      var ordered = [];
+      for (var o = 0; o < n; o++) ordered.push(chroma[(cut + 1 + o) % n]);
+      var angs = [ordered[0].h];
+      for (var o2 = 1; o2 < n; o2++) {
+        var hh = ordered[o2].h;
+        while (hh < angs[o2 - 1]) hh += 360;
+        angs.push(hh);
+      }
+      var cur = [ordered[0]];
+      for (var q = 1; q < ordered.length; q++) {
+        if (angs[q] - angs[q - 1] > HUE_GAP) {
+          groups.push(cur);
+          cur = [];
+        }
+        cur.push(ordered[q]);
+      }
       groups.push(cur);
-      cur = [];
+      if (maxGap <= HUE_GAP && groups.length > 1) {
+        // Toutes les teintes tiennent dans un mouchoir : une seule famille.
+        var solo = [];
+        for (var u = 0; u < groups.length; u++) solo.push.apply(solo, groups[u]);
+        solo.sort(function (a, b) {
+          return a.h - b.h;
+        });
+        groups = [solo];
+      }
     }
-    cur.push(chroma[j]);
   }
-  if (cur.length) groups.push(cur);
 
-  // Absorbe les micro-familles (< 1.5% des cellules) par la voisine la plus proche en teinte.
+  // Absorbe les micro-familles (< 1.5% des cellules) par la voisine la plus
+  // proche en teinte (distance pondérée chroma × effectif).
   var totalCells = 0;
   for (var t = 0; t < colors.length; t++) totalCells += colors[t].count;
   if (totalCells > 0 && groups.length > 1) {
@@ -208,36 +279,24 @@ export function groupByHue(colors) {
       else kept.push(groups[g]);
     }
     if (kept.length > 0) {
-      for (var u = 0; u < tiny.length; u++) {
-        var hues = tiny[u].map(function (c) {
-          return c.hue;
-        });
-        var ws = tiny[u].map(function (c) {
-          return c.count;
-        });
-        var hm = hueMean(hues, ws);
+      for (var u2 = 0; u2 < tiny.length; u2++) {
+        var hm = hueMean(tiny[u2]);
         var best = 0;
         var bestD = Infinity;
         for (var k = 0; k < kept.length; k++) {
-          var kh = kept[k].map(function (c) {
-            return c.hue;
-          });
-          var kw = kept[k].map(function (c) {
-            return c.count;
-          });
-          var d = hueDist(hm, hueMean(kh, kw));
+          var d = hueDist(hm, hueMean(kept[k]));
           if (d < bestD) {
             bestD = d;
             best = k;
           }
         }
-        for (var v = 0; v < tiny[u].length; v++) kept[best].push(tiny[u][v]);
+        for (var v = 0; v < tiny[u2].length; v++) kept[best].push(tiny[u2][v]);
       }
       groups = kept;
     }
-    for (var q = 0; q < groups.length; q++) {
-      groups[q].sort(function (a, b) {
-        return a.hue - b.hue;
+    for (var q2 = 0; q2 < groups.length; q2++) {
+      groups[q2].sort(function (a, b) {
+        return a.h - b.h;
       });
     }
   }
@@ -246,16 +305,12 @@ export function groupByHue(colors) {
   function finalize(list, gray) {
     if (!list.length) return;
     var tot = 0;
-    var hues = [];
-    var ws = [];
     var rep = list[0];
     for (var i = 0; i < list.length; i++) {
       tot += list[i].count;
-      hues.push(list[i].hue);
-      ws.push(list[i].count);
       if (list[i].count > rep.count) rep = list[i];
     }
-    var hue = gray ? 0 : hueMean(hues, ws);
+    var hue = gray ? 0 : hueMean(list);
     var cols = list
       .slice()
       .sort(function (a, b) {
@@ -278,11 +333,11 @@ export function groupByHue(colors) {
   for (var f = 0; f < groups.length; f++) finalize(groups[f], false);
   // Unicité des ids si deux familles tombent sur le même bucket (rare).
   var seen = {};
-  for (var n = 0; n < fams.length; n++) {
-    var base = fams[n].id;
+  for (var nn = 0; nn < fams.length; nn++) {
+    var base = fams[nn].id;
     var k2 = 2;
-    while (seen[fams[n].id]) fams[n].id = base + "-" + k2++;
-    seen[fams[n].id] = true;
+    while (seen[fams[nn].id]) fams[nn].id = base + "-" + k2++;
+    seen[fams[nn].id] = true;
   }
   fams.sort(function (a, b) {
     return b.total - a.total;
@@ -291,17 +346,18 @@ export function groupByHue(colors) {
 }
 
 /**
- * Quantifie une famille à k nuances : tri par luminosité (V), découpe en k
- * paquets à poids (nb de cellules) équilibré, représentant = moyenne pondérée.
+ * Quantifie une famille à k nuances : tri par clarté L (perceptuelle),
+ * découpe en k paquets à poids (nb de cellules) équilibré,
+ * représentant = moyenne pondérée.
  * @returns {Map<number,{r,g,b}>} clé rgb d'origine -> couleur de remplacement.
  */
 export function quantizeFamily(family, k) {
   var map = new Map();
   var cols = family.colors.slice().sort(function (a, b) {
-    var va = rgbToHsv(a.r, a.g, a.b).v;
-    var vb = rgbToHsv(b.r, b.g, b.b).v;
-    if (va !== vb) return va - vb;
-    return (a.r + a.g + a.b) - (b.r + b.g + b.b);
+    var la = rgbToLab(a.r, a.g, a.b).L;
+    var lb = rgbToLab(b.r, b.g, b.b).L;
+    if (la !== lb) return la - lb;
+    return a.count - b.count;
   });
   var n = cols.length;
   var kk = Math.max(1, Math.min(k || n, n));
