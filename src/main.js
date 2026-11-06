@@ -22,8 +22,9 @@
 // NOTE: bump the ?v= query on every asset change — GitHub Pages (and
 // Safari) cache aggressively, and a stale JS/CSS with fresh HTML is the
 // classic "button exists but does nothing" mystery. Bump all together.
-import { drawGrid } from "./overlay.js?v=2";
-import { cleanImage } from "./clean.js?v=2";
+import { drawGrid } from "./overlay.js?v=3";
+import { cleanImage } from "./clean.js?v=3";
+import { extractCellColors, groupByHue, applyPalette } from "./palette.js?v=3";
 
 const $ = (id) => document.getElementById(id);
 
@@ -39,12 +40,15 @@ const state = {
   showChunks: true,
   gridColor: "#ff2d55", // one color for grid lines, chunk highlights + labels
   cleaned: false, // viewing the median-flattened image (rebuilt from original)
+  paletteLevels: {}, // familyId -> kept shade count (1..N, default N = untouched)
 };
 
 const els = {};
 let imgEl = null; // currently loaded HTMLImageElement (for re-detect / redraw)
 let detectGridFn = null; // lazily imported from ./detect.js
 let originalImageData = null; // pristine upload; cleaning always starts here
+let cleanedBase = null; // median-flattened image BEFORE palette quantization
+let paletteFamilies = []; // groupByHue() output for the current cleaned view
 
 for (const id of [
   "fileInput",
@@ -63,6 +67,8 @@ for (const id of [
   "downloadBtn",
   "cleanBtn",
   "status",
+  "paletteList",
+  "paletteGroup",
 ]) {
   els[id] = $(id);
 }
@@ -202,6 +208,10 @@ function drawImageToCanvas(img) {
   originalImageData = imageCtx.getImageData(0, 0, imageCanvas.width, imageCanvas.height);
   // A new upload leaves cleaned mode.
   state.cleaned = false;
+  state.paletteLevels = {};
+  cleanedBase = null;
+  paletteFamilies = [];
+  renderPalette();
   if (els.cleanBtn) els.cleanBtn.textContent = "🧹 Clean my pixels!";
 }
 
@@ -398,22 +408,145 @@ function putPixels(pixels) {
 }
 
 // Rebuild the cleaned image from the pristine upload with current grid
-// params, show it, redraw the overlay. Returns false when impossible.
+// params, rebuild the palette families on top, apply each family's shade
+// level, show it, redraw the overlay. Returns false when impossible.
 function applyClean() {
   if (!originalImageData) return false;
   try {
-    const out = cleanImage(originalImageData, {
+    const grid = {
       cellW: state.cellW,
       cellH: state.cellH,
       offX: state.offX,
       offY: state.offY,
-    });
-    putPixels(out);
-    redrawOverlay();
+    };
+    cleanedBase = cleanImage(originalImageData, grid);
+    // Palette families are computed on the cleaned cells (1 color per cell),
+    // so JPEG wobble is already gone and only true shades remain.
+    try {
+      paletteFamilies = groupByHue(extractCellColors(cleanedBase, grid));
+    } catch (err) {
+      console.error(err);
+      paletteFamilies = [];
+    }
+    // Drop levels for families that vanished; clamp the rest to the new N.
+    for (const id of Object.keys(state.paletteLevels)) {
+      const fam = paletteFamilies.find((f) => f.id === id);
+      if (!fam) delete state.paletteLevels[id];
+      else state.paletteLevels[id] = Math.max(1, Math.min(fam.colors.length, Math.round(state.paletteLevels[id])));
+    }
+    applyPaletteView();
+    renderPalette();
     return true;
   } catch (err) {
     console.error(err);
     return false;
+  }
+}
+
+// Re-apply the per-family shade levels onto the cached cleanedBase
+// (cheap: no re-clean needed when only a slider moved).
+function applyPaletteView() {
+  if (!cleanedBase) return;
+  const grid = {
+    cellW: state.cellW,
+    cellH: state.cellH,
+    offX: state.offX,
+    offY: state.offY,
+  };
+  let out = cleanedBase;
+  if (paletteFamilies.length) {
+    try {
+      out = applyPalette(cleanedBase, grid, paletteFamilies, state.paletteLevels);
+    } catch (err) {
+      console.error(err);
+      out = cleanedBase;
+    }
+  }
+  putPixels(out);
+  redrawOverlay();
+}
+
+function levelOf(fam) {
+  const v = Math.round(Number(state.paletteLevels[fam.id]));
+  if (!Number.isFinite(v)) return fam.colors.length;
+  return Math.max(1, Math.min(fam.colors.length, v));
+}
+
+// Render one card per hue family: swatch, shade dots, 1..N slider.
+function renderPalette() {
+  const list = els.paletteList;
+  const group = els.paletteGroup;
+  if (!list || !group) return;
+  list.textContent = "";
+  const show = state.cleaned && paletteFamilies.length > 0;
+  group.hidden = !show;
+  if (!show) return;
+  for (const fam of paletteFamilies) {
+    const n = fam.colors.length;
+    const k = levelOf(fam);
+    const card = document.createElement("div");
+    card.className = "palette-fam";
+
+    const top = document.createElement("div");
+    top.className = "palette-fam-top";
+    const dot = document.createElement("span");
+    dot.className = "palette-dot";
+    dot.style.background = fam.hex;
+    const nameWrap = document.createElement("div");
+    const name = document.createElement("div");
+    name.className = "palette-fam-name";
+    name.textContent = fam.name;
+    const sub = document.createElement("div");
+    sub.className = "palette-fam-sub";
+    sub.textContent = `${fam.total} cells`;
+    nameWrap.appendChild(name);
+    nameWrap.appendChild(sub);
+    const count = document.createElement("span");
+    count.className = "palette-fam-count";
+    count.textContent = n <= 1 ? "1 shade" : `${k} / ${n}`;
+    top.appendChild(dot);
+    top.appendChild(nameWrap);
+    top.appendChild(count);
+    card.appendChild(top);
+
+    if (n > 1) {
+      const dots = document.createElement("div");
+      dots.className = "palette-shades";
+      for (const c of fam.colors.slice(0, 12)) {
+        const chip = document.createElement("i");
+        chip.style.background = c.hex;
+        chip.title = `${c.hex} (${c.count} cells)`;
+        dots.appendChild(chip);
+      }
+      card.appendChild(dots);
+
+      const row = document.createElement("label");
+      row.className = "palette-slider-row";
+      const slider = document.createElement("input");
+      slider.type = "range";
+      slider.min = "1";
+      slider.max = String(n);
+      slider.step = "1";
+      slider.value = String(k);
+      slider.setAttribute("aria-label", `${fam.name} shades (1 to ${n})`);
+      const val = document.createElement("span");
+      val.textContent = k <= 1 ? "1 shade" : `${k} shades`;
+      slider.addEventListener("input", () => {
+        state.paletteLevels[fam.id] = Number(slider.value);
+        val.textContent = Number(slider.value) <= 1 ? "1 shade" : `${slider.value} shades`;
+        count.textContent = `${slider.value} / ${n}`;
+        applyPaletteView();
+      });
+      row.appendChild(slider);
+      row.appendChild(val);
+      card.appendChild(row);
+    } else {
+      const single = document.createElement("div");
+      single.className = "palette-fam-sub";
+      single.textContent = `${fam.hex} · single shade`;
+      card.appendChild(single);
+    }
+    list.appendChild(card);
   }
 }
 
@@ -442,15 +575,21 @@ function setCleaned(on) {
       setStatus("Load a picture first, cutie — then sparkle-clean it! ✨");
       return;
     }
+    // Flag FIRST: renderPalette() inside applyClean() only shows the group
+    // when cleaned mode is already on.
+    state.cleaned = true;
     if (!applyClean()) {
+      state.cleaned = false;
       setStatus("Cleaning fizzled — tweak the grid first? 🧹");
       return;
     }
-    state.cleaned = true;
     if (els.cleanBtn) els.cleanBtn.textContent = "↩ Back to photo";
-    setStatus("Squeaky clean! Nudge the grid and it re-cleans. ✨");
+    setStatus("Squeaky clean! Your palette cuties are below. ✨");
   } else {
     state.cleaned = false;
+    cleanedBase = null;
+    paletteFamilies = [];
+    renderPalette();
     if (originalImageData) {
       putPixels(originalImageData);
       redrawOverlay();
