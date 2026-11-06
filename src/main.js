@@ -23,10 +23,10 @@
 // Safari) cache aggressively, and a stale JS/CSS with fresh HTML is the
 // classic "button exists but does nothing" mystery. Bump all together.
 // APP_VERSION is shown in the footer so you can SEE which build runs.
-const APP_VERSION = 5;
-import { drawGrid } from "./overlay.js?v=5";
-import { cleanImage } from "./clean.js?v=5";
-import { extractCellColors, groupByHue, applyPalette } from "./palette.js?v=5";
+const APP_VERSION = 7;
+import { drawGrid } from "./overlay.js?v=7";
+import { cleanImage } from "./clean.js?v=7";
+import { extractCellColors, groupByHue, applyPalette } from "./palette.js?v=7";
 
 const $ = (id) => document.getElementById(id);
 
@@ -139,7 +139,7 @@ function redrawOverlay() {
 async function loadDetectFn() {
   if (detectGridFn) return detectGridFn;
   try {
-    const mod = await import("./detect.js?v=5");
+    const mod = await import("./detect.js?v=7");
     if (typeof mod.detectGrid === "function") {
       detectGridFn = mod.detectGrid;
       return detectGridFn;
@@ -431,10 +431,11 @@ function applyClean() {
       paletteFamilies = [];
     }
     // Drop levels for families that vanished; clamp the rest to the new N.
+    // Level 0 is allowed: the family is eliminated into its nearest survivor.
     for (const id of Object.keys(state.paletteLevels)) {
       const fam = paletteFamilies.find((f) => f.id === id);
       if (!fam) delete state.paletteLevels[id];
-      else state.paletteLevels[id] = Math.max(1, Math.min(fam.colors.length, Math.round(state.paletteLevels[id])));
+      else state.paletteLevels[id] = Math.max(0, Math.min(fam.colors.length, Math.round(state.paletteLevels[id])));
     }
     applyPaletteView();
     renderPalette();
@@ -471,10 +472,17 @@ function applyPaletteView() {
 function levelOf(fam) {
   const v = Math.round(Number(state.paletteLevels[fam.id]));
   if (!Number.isFinite(v)) return fam.colors.length;
-  return Math.max(1, Math.min(fam.colors.length, v));
+  return Math.max(0, Math.min(fam.colors.length, v));
 }
 
-// Render one card per hue family: swatch, shade dots, 1..N slider.
+function shadeLabel(k) {
+  if (k <= 0) return "merged!";
+  if (k <= 1) return "1 shade";
+  return `${k} shades`;
+}
+
+// Render one card per hue family: swatch, shade dots, 0..N slider
+// (0 = the family is eliminated into its nearest surviving shade).
 function renderPalette() {
   const list = els.paletteList;
   const group = els.paletteGroup;
@@ -505,7 +513,7 @@ function renderPalette() {
     nameWrap.appendChild(sub);
     const count = document.createElement("span");
     count.className = "palette-fam-count";
-    count.textContent = n <= 1 ? "1 shade" : `${k} / ${n}`;
+    count.textContent = k <= 0 ? "merged" : n <= 1 ? "1 shade" : `${k} / ${n}`;
     top.appendChild(dot);
     top.appendChild(nameWrap);
     top.appendChild(count);
@@ -521,32 +529,36 @@ function renderPalette() {
         dots.appendChild(chip);
       }
       card.appendChild(dots);
+    }
 
+    {
       const row = document.createElement("label");
       row.className = "palette-slider-row";
       const slider = document.createElement("input");
       slider.type = "range";
-      slider.min = "1";
+      slider.min = "0";
       slider.max = String(n);
       slider.step = "1";
       slider.value = String(k);
-      slider.setAttribute("aria-label", `${fam.name} shades (1 to ${n})`);
+      slider.setAttribute("aria-label", `${fam.name} shades (0 merges into nearest, 1 to ${n})`);
       const val = document.createElement("span");
-      val.textContent = k <= 1 ? "1 shade" : `${k} shades`;
+      val.textContent = shadeLabel(k);
       slider.addEventListener("input", () => {
-        state.paletteLevels[fam.id] = Number(slider.value);
-        val.textContent = Number(slider.value) <= 1 ? "1 shade" : `${slider.value} shades`;
-        count.textContent = `${slider.value} / ${n}`;
+        const v = Number(slider.value);
+        state.paletteLevels[fam.id] = v;
+        val.textContent = shadeLabel(v);
+        count.textContent = v <= 0 ? "merged" : n <= 1 ? "1 shade" : `${v} / ${n}`;
         applyPaletteView();
       });
       row.appendChild(slider);
       row.appendChild(val);
       card.appendChild(row);
-    } else {
-      const single = document.createElement("div");
-      single.className = "palette-fam-sub";
-      single.textContent = `${fam.hex} · single shade`;
-      card.appendChild(single);
+      if (n <= 1) {
+        const single = document.createElement("div");
+        single.className = "palette-fam-sub";
+        single.textContent = `${fam.hex} · 0 merges it away`;
+        card.appendChild(single);
+      }
     }
     list.appendChild(card);
   }

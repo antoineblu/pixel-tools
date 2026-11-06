@@ -5,9 +5,9 @@
  *   1. extractCellColors : lit le pixel central de chaque cellule -> [{r,g,b,count}]
  *      + pré-fusion des quasi-doublons par DeltaE (artefacts JPEG invisibles).
  *   2. groupByHue : sépare achromatiques (faible chroma CIELAB) des chromatiques,
- *      regroupe les chromatiques par teinte CIELAB circulaire (coupure au plus
- *      grand gap) puis par clarté (un bordeaux et un rose partagent leur teinte
- *      mais pas leur famille). La DIRECTION du vecteur chrominance compte, pas
+ *      puis regroupe les chromatiques sur un seul critère perceptuel : triées
+ *      par teinte, deux voisines se séparent au-delà de 25 DeltaE (un bordeaux
+ *      et un rose partagent leur direction mais pas leur famille).
  *      la proximité RGB brute : un gris teinté JPEG (petit vecteur, direction
  *      bruitée) reste gris, un rose pâle (petit vecteur mais franchement
  *      direction rose) reste rose.
@@ -27,9 +27,13 @@ var MERGE_DE = 2.5;
 // Seuil achromatique sur la chroma CIELAB. Mesuré : gris teinté JPEG C ~9,
 // rose pâle C ~10.4, gris chaud C ~12.7 (lui est vraiment mauve : il reste rose).
 var GRAY_CHROMA = 10;
-var HUE_GAP = 28; // coupure entre familles quand le gap de teinte dépasse ce seuil (degrés)
-var L_SPLIT = 22; // ... ou quand le gap de clarté dépasse ce seuil (bordeaux vs rose)
-var MIN_FAMILY_SHARE = 0.015; // familles < 1.5% des cellules absorbées par la voisine
+var SPLIT_DE = 25; // deux nuances voisines (triées par teinte) se séparent au-delà
+// de 25 DeltaE. Calibré : pas de dégradé 12, verts proches 21, bleu-violet 29,
+// bordeaux-rose 35+, jaune-vert 60. Un seul critère perceptuel, pas de seuils
+// teinte/clarté qui se contredisent au couteau.
+var MIN_FAMILY_SHARE = 0.015; // familles < 1.5% des cellules : candidates à l'absorption
+var ABSORB_MAX_DE = 12; // ... mais seulement si DeltaE < 12 : un pixel jaune isolé
+// (dE ~60 du vert) garde sa propre carte, seuls les quasi-doublons fusionnent.
 
 function keyOf(r, g, b) {
   return (r << 16) | (g << 8) | b;
@@ -93,20 +97,20 @@ function hueMean(items) {
   return deg < 0 ? deg + 360 : deg;
 }
 
-function hueDist(a, b) {
-  var d = Math.abs(a - b) % 360;
-  return d > 180 ? 360 - d : d;
-}
-
-// Clarté moyenne d'un groupe, pondérée par l'effectif.
-function groupLMean(gr) {
+// Lab moyen d'un groupe, pondéré par l'effectif.
+function groupMeanLab(gr) {
   var tot = 0;
-  var sum = 0;
+  var L = 0;
+  var a = 0;
+  var b = 0;
   for (var i = 0; i < gr.length; i++) {
     tot += gr[i].count;
-    sum += gr[i].L * gr[i].count;
+    L += gr[i].lab.L * gr[i].count;
+    a += gr[i].lab.a * gr[i].count;
+    b += gr[i].lab.b * gr[i].count;
   }
-  return tot > 0 ? sum / tot : 0;
+  if (tot === 0) return { L: 0, a: 0, b: 0 };
+  return { L: L / tot, a: a / tot, b: b / tot };
 }
 
 // Nom affichable à partir d'une teinte CIELAB hab (0° = axe +a, rouge).
@@ -219,7 +223,7 @@ export function groupByHue(colors) {
   for (var i = 0; i < colors.length; i++) {
     var c = colors[i];
     var lab = rgbToLab(c.r, c.g, c.b);
-    var item = { r: c.r, g: c.g, b: c.b, count: c.count, h: lab.h, C: lab.C, L: lab.L };
+    var item = { r: c.r, g: c.g, b: c.b, count: c.count, h: lab.h, C: lab.C, L: lab.L, lab: lab };
     if (lab.C < GRAY_CHROMA) grays.push(item);
     else chroma.push(item);
   }
@@ -227,78 +231,30 @@ export function groupByHue(colors) {
     return a.h - b.h;
   });
 
-  // Découpe circulaire : on coupe au PLUS GRAND gap (wrap inclus), puis aux
-  // gaps intérieurs > HUE_GAP. Ça évite de couper une famille à cheval sur 0°
-  // (ex. des roses à 355° et 5° restent ensemble).
+  // Découpe circulaire sur la distance perceptuelle : on trie par teinte
+  // (pour comparer des voisins qui se ressemblent) et on coupe entre deux
+  // voisines dès que leur DeltaE dépasse SPLIT_DE. Le wrap est traité comme
+  // une paire normale, donc aucune famille à cheval sur 0° n'est coupée.
   var groups = [];
   if (chroma.length) {
-    var n = chroma.length;
-    if (n === 1) {
-      groups.push([chroma[0]]);
-    } else {
-      var gaps = [];
-      for (var j = 0; j < n; j++) {
-        var nxt = chroma[(j + 1) % n];
-        var gap = (nxt.h - chroma[j].h + 360) % 360;
-        gaps.push(gap);
+    var cur = [chroma[0]];
+    for (var j = 1; j < chroma.length; j++) {
+      if (deltaE(cur[cur.length - 1].lab, chroma[j].lab) > SPLIT_DE) {
+        groups.push(cur);
+        cur = [];
       }
-      var cut = 0;
-      var maxGap = -1;
-      for (var g2 = 0; g2 < n; g2++) {
-        if (gaps[g2] > maxGap) {
-          maxGap = gaps[g2];
-          cut = g2;
-        }
-      }
-      // Ordre de parcours à partir d'après la coupe, teintes DÉROULÉES
-      // (+360° après un passage par 0°) pour que les gaps restent mesurables.
-      var ordered = [];
-      for (var o = 0; o < n; o++) ordered.push(chroma[(cut + 1 + o) % n]);
-      var angs = [ordered[0].h];
-      for (var o2 = 1; o2 < n; o2++) {
-        var hh = ordered[o2].h;
-        while (hh < angs[o2 - 1]) hh += 360;
-        angs.push(hh);
-      }
-      var cur = [ordered[0]];
-      for (var q = 1; q < ordered.length; q++) {
-        if (angs[q] - angs[q - 1] > HUE_GAP) {
-          groups.push(cur);
-          cur = [];
-        }
-        cur.push(ordered[q]);
-      }
-      groups.push(cur);
-      if (maxGap <= HUE_GAP && groups.length > 1) {
-        // Toutes les teintes tiennent dans un mouchoir : une seule famille.
-        var solo = [];
-        for (var u = 0; u < groups.length; u++) solo.push.apply(solo, groups[u]);
-        solo.sort(function (a, b) {
-          return a.h - b.h;
-        });
-        groups = [solo];
+      cur.push(chroma[j]);
+    }
+    groups.push(cur);
+    if (groups.length > 1) {
+      var first = groups[0];
+      var lastG = groups[groups.length - 1];
+      if (deltaE(lastG[lastG.length - 1].lab, first[0].lab) <= SPLIT_DE) {
+        groups[0] = lastG.concat(first);
+        groups.pop();
       }
     }
   }
-
-  // Sous-découpe par clarté : un bordeaux (L~27) et un rose (L~73) partagent
-  // leur teinte mais pas leur famille — sauf vrai dégradé continu (pas < 22).
-  var lSplit = [];
-  for (var sp = 0; sp < groups.length; sp++) {
-    var byL = groups[sp].slice().sort(function (a, b) {
-      return a.L - b.L;
-    });
-    var run = [byL[0]];
-    for (var sl = 1; sl < byL.length; sl++) {
-      if (byL[sl].L - byL[sl - 1].L > L_SPLIT) {
-        lSplit.push(run);
-        run = [];
-      }
-      run.push(byL[sl]);
-    }
-    lSplit.push(run);
-  }
-  groups = lSplit;
 
   // Absorbe les micro-familles (< 1.5% des cellules) par la voisine la plus
   // proche en teinte ET clarté (un petit brun rejoint les oranges, pas les roses).
@@ -315,20 +271,23 @@ export function groupByHue(colors) {
     }
     if (kept.length > 0) {
       for (var u2 = 0; u2 < tiny.length; u2++) {
-        var hm = hueMean(tiny[u2]);
-        var lm = groupLMean(tiny[u2]);
-        var best = 0;
+        var mLab = groupMeanLab(tiny[u2]);
+        var best = -1;
         var bestD = Infinity;
         for (var k = 0; k < kept.length; k++) {
-          var d =
-            hueDist(hm, hueMean(kept[k])) +
-            Math.abs(lm - groupLMean(kept[k])) * 0.5;
+          var d = deltaE(mLab, groupMeanLab(kept[k]));
           if (d < bestD) {
             bestD = d;
             best = k;
           }
         }
-        for (var v = 0; v < tiny[u2].length; v++) kept[best].push(tiny[u2][v]);
+        // Une couleur rare mais franche (pixel jaune isolé, dE ~60 du vert)
+        // garde sa propre carte : on n'absorbe que les quasi-doublons.
+        if (best >= 0 && bestD < ABSORB_MAX_DE) {
+          for (var v = 0; v < tiny[u2].length; v++) kept[best].push(tiny[u2][v]);
+        } else {
+          kept.push(tiny[u2]);
+        }
       }
       groups = kept;
     }
@@ -349,7 +308,7 @@ export function groupByHue(colors) {
       if (list[i].count > rep.count) rep = list[i];
     }
     var hue = gray ? 0 : hueMean(list);
-    var lMean = gray ? 0 : groupLMean(list);
+    var lMean = gray ? 0 : groupMeanLab(list).L;
     var cols = list
       .slice()
       .sort(function (a, b) {
@@ -472,7 +431,9 @@ function emit(bucket, map) {
  * @param cleaned {width,height,data} image nettoyée (référence, non mutée).
  * @param grid {cellW,cellH,offX,offY}.
  * @param families sortie de groupByHue.
- * @param levels {familyId: k} (k absent ou >= N = identité).
+ * @param levels {familyId: k} (k absent ou >= N = identité, k >= 1 = k nuances,
+ *   k = 0 = famille éliminée : ses cellules rejoignent la nuance survivante
+ *   la plus proche en DeltaE — pratique contre les micro-familles parasites).
  * @returns {{width,height,data}} nouvelle image.
  */
 export function applyPalette(cleaned, grid, families, levels) {
@@ -482,17 +443,52 @@ export function applyPalette(cleaned, grid, families, levels) {
   var out = new Uint8ClampedArray(src.length);
   out.set(src);
 
-  var remap = new Map(); // clé rgb d'origine -> {r,g,b}
+  // Normalise les niveaux : k=0 autorisé (élimination).
+  var norm = [];
   for (var f = 0; f < families.length; f++) {
     var fam = families[f];
     var k = levels && Number(levels[fam.id]);
     if (!Number.isFinite(k)) k = fam.colors.length;
-    k = Math.max(1, Math.min(Math.round(k), fam.colors.length));
-    if (k >= fam.colors.length) continue; // identité : rien à remapper
-    var q = quantizeFamily(fam, k);
-    q.forEach(function (v, key) {
-      remap.set(key, v);
-    });
+    k = Math.max(0, Math.min(Math.round(k), fam.colors.length));
+    norm.push({ fam: fam, k: k });
+  }
+  var survivors = norm.filter(function (e) {
+    return e.k >= 1;
+  });
+  // Tout éliminer = identité (on ne peut pas repeindre sans survivants).
+  if (survivors.length === 0) return { width: w, height: h, data: out };
+
+  var remap = new Map(); // clé rgb d'origine -> {r,g,b}
+  var pool = []; // couleurs survivantes {lab, final} pour accueillir les éliminées
+  for (var s = 0; s < survivors.length; s++) {
+    var sf = survivors[s].fam;
+    var sk = survivors[s].k;
+    var q = sk >= sf.colors.length ? null : quantizeFamily(sf, sk);
+    for (var c = 0; c < sf.colors.length; c++) {
+      var base = sf.colors[c];
+      var key = keyOf(base.r, base.g, base.b);
+      var final = q ? q.get(key) : { r: base.r, g: base.g, b: base.b };
+      remap.set(key, final);
+      pool.push({ lab: rgbToLab(base.r, base.g, base.b), final: final });
+    }
+  }
+  // Familles à 0 : chaque couleur rejoint la nuance survivante la plus proche.
+  for (var z = 0; z < norm.length; z++) {
+    if (norm[z].k >= 1) continue;
+    var zcols = norm[z].fam.colors;
+    for (var zc = 0; zc < zcols.length; zc++) {
+      var zlab = rgbToLab(zcols[zc].r, zcols[zc].g, zcols[zc].b);
+      var bi = -1;
+      var bd = Infinity;
+      for (var p = 0; p < pool.length; p++) {
+        var dd = deltaE(zlab, pool[p].lab);
+        if (dd < bd) {
+          bd = dd;
+          bi = p;
+        }
+      }
+      if (bi >= 0) remap.set(keyOf(zcols[zc].r, zcols[zc].g, zcols[zc].b), pool[bi].final);
+    }
   }
   if (remap.size === 0) return { width: w, height: h, data: out };
 

@@ -198,6 +198,55 @@ const wset = new Set();
 for (let i = 0; i < wout.data.length; i += 4) wset.add(`${wout.data[i]},${wout.data[i + 1]},${wout.data[i + 2]}`);
 check("gris k=1 : blanc réel, pas de moyenne", wset.size === 1 && wset.has("250,250,250"), ` (got ${[...wset]})`);
 
+// Une couleur rare mais franche garde sa carte : 1 pixel jaune ≠ vert.
+const rare = groupByHue([
+  { r: 245, g: 225, b: 80, count: 1 },
+  { r: 60, g: 180, b: 90, count: 200 },
+]);
+check(
+  "jaune unique pas absorbé par le vert",
+  rare.length === 2 && rare.some((f) => f.name === "Jaune"),
+  ` (fams=${rare.map((f) => f.name + ":" + f.total).join(",")})`
+);
+
+// Quasi-doublon rare (dE ~3 du rose) : absorbé, pas de carte parasite.
+const near = groupByHue([
+  { r: 250, g: 150, b: 180, count: 100 },
+  { r: 242, g: 142, b: 172, count: 1 },
+]);
+check("quasi-doublon absorbé en une famille", near.length === 1 && near[0].colors.length === 2, ` (got ${near.length})`);
+
+// Mettre une famille à 0 : ses cellules rejoignent le survivant le plus proche.
+const elimImg = cellsImage([[250, 150, 180], [248, 142, 172], [230, 40, 60], [128, 128, 128]]);
+const efams = groupByHue(extractCellColors(elimImg, grid));
+const erose = efams.find((f) => f.name === "Rose");
+const eout = applyPalette(elimImg, grid, efams, { [erose.id]: 0 });
+const eset = new Set();
+for (let i = 0; i < eout.data.length; i += 4) eset.add(`${eout.data[i]},${eout.data[i + 1]},${eout.data[i + 2]}`);
+check("famille à 0 : roses réassignés, reste rouge + gris", eset.size === 2 && !eset.has("250,150,180") && !eset.has("248,142,172"), ` (got ${[...eset]})`);
+
+// Tout à 0 = identité (pas de crash, image inchangée).
+const allZero = {};
+for (const f of efams) allZero[f.id] = 0;
+const zout = applyPalette(elimImg, grid, efams, allZero);
+check("tout à 0 : identité", countColors(zout) === 4 && zout.data[0] === elimImg.data[0]);
+
+// Invariant : couleurs distinctes affichées === somme des niveaux
+// (familles à 0 exclues, les autres à min(k, N)).
+function expectedTotal(fams, levels) {
+  let t = 0;
+  for (const f of fams) {
+    const raw = levels[f.id];
+    const k = Number.isFinite(Number(raw)) ? Math.max(0, Math.min(Math.round(Number(raw)), f.colors.length)) : f.colors.length;
+    if (k >= 1) t += k;
+  }
+  return t;
+}
+const iout = applyPalette(elimImg, grid, efams, { [erose.id]: 1 });
+check("invariant : distinctes === somme des niveaux", countColors(iout) === expectedTotal(efams, { [erose.id]: 1 }), ` (got ${countColors(iout)}, want ${expectedTotal(efams, { [erose.id]: 1 })})`);
+const iout0 = applyPalette(elimImg, grid, efams, { [erose.id]: 0 });
+check("invariant avec un 0 : 2 === 0+1+1", countColors(iout0) === expectedTotal(efams, { [erose.id]: 0 }), ` (got ${countColors(iout0)})`);
+
 function cellsImage(list) {
   const W2 = list.length * cellW;
   const d2 = new Uint8ClampedArray(W2 * cellH * 4);

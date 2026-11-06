@@ -48,7 +48,13 @@ frank pink-ward vector stays pink), hue families are cut circularly so
 reds and pinks stay separate, and lightness splits darks from lights
 (claret vs light pink get "foncé" / "clair" cards instead of mixing).
 Each shade bucket is repainted with its real majority color — never an
-invented average (no pinkish white, no brownish pink). Lowering a slider
+invented average (no pinkish white, no brownish pink). Setting a slider
+to **0 eliminates the family**: its cells rejoin the nearest surviving
+shade (handy against parasitic micro-families; all-zero means identity).
+Rare colors keep
+their own card: micro-families (< 1.5% of cells) are only absorbed when
+within 12 DeltaE of a neighbor — a lone yellow pixel stays yellow instead
+of turning green. Lowering a slider
 re-quantizes just that family — e.g. 5 pinks → 3 for a softer gradient or
 → 1 for a flat fill.
 Grays/blacks/white live in their own family. Moving a slider never
