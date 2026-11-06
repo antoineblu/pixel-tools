@@ -44,9 +44,13 @@ After **Clean**, each hue family (pink, green, blue, …) gets its own card
 with a **1..N shades slider** (`src/palette.js`). Grouping works in CIELAB:
 near-duplicates below 2.5 DeltaE (invisible JPEG wobble) are pre-merged,
 gray means low chroma (a JPEG-tinted gray stays gray, a pale pink with a
-frank pink-ward vector stays pink), and hue families are cut circularly so
-reds and pinks stay separate. Lowering a slider re-quantizes just that
-family — e.g. 5 pinks → 3 for a softer gradient or → 1 for a flat fill.
+frank pink-ward vector stays pink), hue families are cut circularly so
+reds and pinks stay separate, and lightness splits darks from lights
+(claret vs light pink get "foncé" / "clair" cards instead of mixing).
+Each shade bucket is repainted with its real majority color — never an
+invented average (no pinkish white, no brownish pink). Lowering a slider
+re-quantizes just that family — e.g. 5 pinks → 3 for a softer gradient or
+→ 1 for a flat fill.
 Grays/blacks/white live in their own family. Moving a slider never
 re-cleans; nudging the grid re-cleans and rebuilds the palette
 (kept levels are clamped to the new shade counts).

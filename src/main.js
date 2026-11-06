@@ -23,10 +23,10 @@
 // Safari) cache aggressively, and a stale JS/CSS with fresh HTML is the
 // classic "button exists but does nothing" mystery. Bump all together.
 // APP_VERSION is shown in the footer so you can SEE which build runs.
-const APP_VERSION = 4;
-import { drawGrid } from "./overlay.js?v=4";
-import { cleanImage } from "./clean.js?v=4";
-import { extractCellColors, groupByHue, applyPalette } from "./palette.js?v=4";
+const APP_VERSION = 5;
+import { drawGrid } from "./overlay.js?v=5";
+import { cleanImage } from "./clean.js?v=5";
+import { extractCellColors, groupByHue, applyPalette } from "./palette.js?v=5";
 
 const $ = (id) => document.getElementById(id);
 
@@ -139,7 +139,7 @@ function redrawOverlay() {
 async function loadDetectFn() {
   if (detectGridFn) return detectGridFn;
   try {
-    const mod = await import("./detect.js?v=4");
+    const mod = await import("./detect.js?v=5");
     if (typeof mod.detectGrid === "function") {
       detectGridFn = mod.detectGrid;
       return detectGridFn;

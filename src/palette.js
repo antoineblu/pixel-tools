@@ -6,11 +6,15 @@
  *      + pré-fusion des quasi-doublons par DeltaE (artefacts JPEG invisibles).
  *   2. groupByHue : sépare achromatiques (faible chroma CIELAB) des chromatiques,
  *      regroupe les chromatiques par teinte CIELAB circulaire (coupure au plus
- *      grand gap). La DIRECTION du vecteur chrominance compte, pas la proximité
- *      RGB brute : un gris teinté JPEG (petit vecteur, direction bruitée) reste
- *      gris, un rose pâle (petit vecteur mais franchement direction rose) reste rose.
+ *      grand gap) puis par clarté (un bordeaux et un rose partagent leur teinte
+ *      mais pas leur famille). La DIRECTION du vecteur chrominance compte, pas
+ *      la proximité RGB brute : un gris teinté JPEG (petit vecteur, direction
+ *      bruitée) reste gris, un rose pâle (petit vecteur mais franchement
+ *      direction rose) reste rose.
  *   3. quantizeFamily : réduit les N nuances d'une famille à k (1..N) en triant
- *      par clarté L et en découpant en k paquets à poids équilibré.
+ *      par clarté L et en découpant en k paquets à poids équilibré, chaque
+ *      paquet étant représenté par sa vraie couleur majoritaire (médoïde —
+ *      jamais de teinte moyenne inventée).
  *   4. applyPalette : remappe chaque cellule vers son représentant quantifié.
  *
  * Pur, sans DOM. Les familles portent un id stable dérivé de leur teinte
@@ -24,6 +28,7 @@ var MERGE_DE = 2.5;
 // rose pâle C ~10.4, gris chaud C ~12.7 (lui est vraiment mauve : il reste rose).
 var GRAY_CHROMA = 10;
 var HUE_GAP = 28; // coupure entre familles quand le gap de teinte dépasse ce seuil (degrés)
+var L_SPLIT = 22; // ... ou quand le gap de clarté dépasse ce seuil (bordeaux vs rose)
 var MIN_FAMILY_SHARE = 0.015; // familles < 1.5% des cellules absorbées par la voisine
 
 function keyOf(r, g, b) {
@@ -93,6 +98,17 @@ function hueDist(a, b) {
   return d > 180 ? 360 - d : d;
 }
 
+// Clarté moyenne d'un groupe, pondérée par l'effectif.
+function groupLMean(gr) {
+  var tot = 0;
+  var sum = 0;
+  for (var i = 0; i < gr.length; i++) {
+    tot += gr[i].count;
+    sum += gr[i].L * gr[i].count;
+  }
+  return tot > 0 ? sum / tot : 0;
+}
+
 // Nom affichable à partir d'une teinte CIELAB hab (0° = axe +a, rouge).
 // Bornes calibrées sur mesures : rouge ~28°, orange ~67°, jaune ~97°,
 // vert ~145-152°, menthe ~171°, cyan ~216°, bleu ~288-297°, violet ~313°,
@@ -110,9 +126,9 @@ export function hueName(h) {
   return "Magenta";
 }
 
-function familyIdFor(hue, gray) {
+function familyIdFor(hue, gray, lMean) {
   if (gray) return "gray";
-  return "hue-" + String(Math.round(hue / 5) * 5);
+  return "hue-" + String(Math.round(hue / 5) * 5) + "-l" + String(Math.round((lMean || 0) / 10) * 10);
 }
 
 /**
@@ -265,8 +281,27 @@ export function groupByHue(colors) {
     }
   }
 
+  // Sous-découpe par clarté : un bordeaux (L~27) et un rose (L~73) partagent
+  // leur teinte mais pas leur famille — sauf vrai dégradé continu (pas < 22).
+  var lSplit = [];
+  for (var sp = 0; sp < groups.length; sp++) {
+    var byL = groups[sp].slice().sort(function (a, b) {
+      return a.L - b.L;
+    });
+    var run = [byL[0]];
+    for (var sl = 1; sl < byL.length; sl++) {
+      if (byL[sl].L - byL[sl - 1].L > L_SPLIT) {
+        lSplit.push(run);
+        run = [];
+      }
+      run.push(byL[sl]);
+    }
+    lSplit.push(run);
+  }
+  groups = lSplit;
+
   // Absorbe les micro-familles (< 1.5% des cellules) par la voisine la plus
-  // proche en teinte (distance pondérée chroma × effectif).
+  // proche en teinte ET clarté (un petit brun rejoint les oranges, pas les roses).
   var totalCells = 0;
   for (var t = 0; t < colors.length; t++) totalCells += colors[t].count;
   if (totalCells > 0 && groups.length > 1) {
@@ -281,10 +316,13 @@ export function groupByHue(colors) {
     if (kept.length > 0) {
       for (var u2 = 0; u2 < tiny.length; u2++) {
         var hm = hueMean(tiny[u2]);
+        var lm = groupLMean(tiny[u2]);
         var best = 0;
         var bestD = Infinity;
         for (var k = 0; k < kept.length; k++) {
-          var d = hueDist(hm, hueMean(kept[k]));
+          var d =
+            hueDist(hm, hueMean(kept[k])) +
+            Math.abs(lm - groupLMean(kept[k])) * 0.5;
           if (d < bestD) {
             bestD = d;
             best = k;
@@ -311,6 +349,7 @@ export function groupByHue(colors) {
       if (list[i].count > rep.count) rep = list[i];
     }
     var hue = gray ? 0 : hueMean(list);
+    var lMean = gray ? 0 : groupLMean(list);
     var cols = list
       .slice()
       .sort(function (a, b) {
@@ -320,9 +359,10 @@ export function groupByHue(colors) {
         return { r: c.r, g: c.g, b: c.b, count: c.count, hex: hexOf(c.r, c.g, c.b) };
       });
     fams.push({
-      id: familyIdFor(Math.round(hue), gray),
+      id: familyIdFor(Math.round(hue), gray, lMean),
       name: gray ? "Gris / Noir / Blanc" : hueName(hue),
       hue: Math.round(hue),
+      lMean: Math.round(lMean),
       gray: gray,
       colors: cols,
       total: tot,
@@ -331,6 +371,22 @@ export function groupByHue(colors) {
   }
   if (grays.length) finalize(grays, true);
   for (var f = 0; f < groups.length; f++) finalize(groups[f], false);
+  // Familles partageant un nom (deux roses séparés par la clarté) :
+  // "Rose clair" / "Rose foncé" au lieu de deux cartes "Rose".
+  var byName = {};
+  for (var dn = 0; dn < fams.length; dn++) {
+    var nm = fams[dn].name;
+    (byName[nm] = byName[nm] || []).push(fams[dn]);
+  }
+  for (var key in byName) {
+    if (Object.prototype.hasOwnProperty.call(byName, key) && byName[key].length > 1) {
+      var dup = byName[key].slice().sort(function (a, b) {
+        return a.lMean - b.lMean;
+      });
+      dup[0].name = key + " foncé";
+      dup[dup.length - 1].name = key + " clair";
+    }
+  }
   // Unicité des ids si deux familles tombent sur le même bucket (rare).
   var seen = {};
   for (var nn = 0; nn < fams.length; nn++) {
@@ -399,19 +455,15 @@ export function quantizeFamily(family, k) {
 }
 
 function emit(bucket, map) {
-  var tot = 0;
-  var r = 0;
-  var g = 0;
-  var b = 0;
-  for (var i = 0; i < bucket.length; i++) {
-    tot += bucket[i].count;
-    r += bucket[i].r * bucket[i].count;
-    g += bucket[i].g * bucket[i].count;
-    b += bucket[i].b * bucket[i].count;
+  // Représentant = MEDOÏDE : la vraie couleur la plus fréquente du paquet.
+  // (Jamais de moyenne inventée : pas de blanc rosâtre ni de rose brunâtre.)
+  var rep = bucket[0];
+  for (var i = 1; i < bucket.length; i++) {
+    if (bucket[i].count > rep.count) rep = bucket[i];
   }
-  var rep = tot > 0 ? { r: Math.round(r / tot), g: Math.round(g / tot), b: Math.round(b / tot) } : { r: bucket[0].r, g: bucket[0].g, b: bucket[0].b };
+  var rgb = { r: rep.r, g: rep.g, b: rep.b };
   for (var j = 0; j < bucket.length; j++) {
-    map.set(keyOf(bucket[j].r, bucket[j].g, bucket[j].b), rep);
+    map.set(keyOf(bucket[j].r, bucket[j].g, bucket[j].b), rgb);
   }
 }
 

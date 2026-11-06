@@ -149,6 +149,73 @@ check("rouge séparé du rose", famOf(230, 40, 60)?.name === "Rouge" && famOf(23
 check("violet reconnu", famOf(150, 90, 200)?.name === "Violet", ` (got ${famOf(150, 90, 200)?.name})`);
 check("vert reconnu", famOf(60, 180, 90)?.name === "Vert", ` (got ${famOf(60, 180, 90)?.name})`);
 
+// Bordeaux sombre vs rose clair : même direction de teinte, familles séparées.
+const darkPink = groupByHue(
+  extractCellColors(cellsImage([[120, 30, 50], [250, 150, 180], [255, 200, 215]]), grid)
+);
+check(
+  "bordeaux séparé des roses clairs",
+  darkPink.length === 2 && darkPink.some((f) => f.colors.some((c) => c.r === 120)),
+  ` (fams=${darkPink.map((f) => f.name + ":" + f.colors.length).join(",")})`
+);
+
+// Rose poussiéreux sombre vs rose clair : deux cartes "Rose foncé" / "Rose clair".
+const dusty = groupByHue(
+  extractCellColors(cellsImage([[140, 90, 100], [250, 150, 180]]), grid)
+);
+const dustyNames = dusty.map((f) => f.name).sort().join("|");
+check("rose sombre vs clair : deux cartes qualifiées", dustyNames === "Rose clair|Rose foncé", ` (got ${dustyNames})`);
+
+// Médoïde : k=1 donne la vraie couleur majoritaire, jamais une moyenne inventée.
+const whiteFam = {
+  id: "t",
+  colors: [
+    { r: 250, g: 250, b: 250, count: 10, hex: "#fafafa" },
+    { r: 245, g: 220, b: 230, count: 1, hex: "#f5dce6" },
+  ],
+};
+const qMed = quantizeFamily(whiteFam, 1);
+const medVals = new Set([...qMed.values()].map((c) => `${c.r},${c.g},${c.b}`));
+check("k=1 blanc majoritaire : 1 seule vraie couleur", medVals.size === 1 && medVals.has("250,250,250"), ` (got ${[...medVals]})`);
+
+// Forçage vert k=1 de bout en bout : 3 cellules vert majoritaire + 1 de chaque
+// autre nuance -> une seule nuance, la majoritaire.
+const gimg = cellsImage([[60, 180, 90], [60, 180, 90], [60, 180, 90], [85, 195, 115], [45, 165, 75], [150, 210, 150]]);
+const gfams = groupByHue(extractCellColors(gimg, grid));
+const gfam = gfams.find((f) => f.name === "Vert" || f.name === "Vert clair" || f.name === "Vert foncé") || gfams[0];
+const gout = applyPalette(gimg, grid, gfams, { [gfam.id]: 1 });
+const gset = new Set();
+for (let i = 0; i < gout.data.length; i += 4) gset.add(`${gout.data[i]},${gout.data[i + 1]},${gout.data[i + 2]}`);
+check("vert k=1 : une seule nuance, la majoritaire", gset.size === 1 && gset.has("60,180,90"), ` (got ${[...gset]})`);
+
+// Famille grise : blanc majoritaire + teinte pâle minoritaire -> k=1 rend du
+// vrai blanc, pas un blanc rosâtre moyen.
+const wimg = cellsImage([[250, 250, 250], [250, 250, 250], [250, 250, 250], [250, 250, 250], [248, 232, 238], [200, 200, 200]]);
+const wfams = groupByHue(extractCellColors(wimg, grid));
+const wfam = wfams.find((f) => f.gray);
+const wout = applyPalette(wimg, grid, wfams, wfam ? { [wfam.id]: 1 } : {});
+const wset = new Set();
+for (let i = 0; i < wout.data.length; i += 4) wset.add(`${wout.data[i]},${wout.data[i + 1]},${wout.data[i + 2]}`);
+check("gris k=1 : blanc réel, pas de moyenne", wset.size === 1 && wset.has("250,250,250"), ` (got ${[...wset]})`);
+
+function cellsImage(list) {
+  const W2 = list.length * cellW;
+  const d2 = new Uint8ClampedArray(W2 * cellH * 4);
+  for (let cx = 0; cx < list.length; cx++) {
+    const [r, g, b] = list[cx];
+    for (let y = 0; y < cellH; y++) {
+      for (let x = cx * cellW; x < (cx + 1) * cellW; x++) {
+        const i = (y * W2 + x) * 4;
+        d2[i] = r;
+        d2[i + 1] = g;
+        d2[i + 2] = b;
+        d2[i + 3] = 255;
+      }
+    }
+  }
+  return { width: W2, height: cellH, data: d2 };
+}
+
 if (failures) {
   console.error(`\n${failures} check(s) FAILED`);
   process.exit(1);
